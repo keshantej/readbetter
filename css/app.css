@@ -387,3 +387,8 @@ mark.signal { background: var(--mark); color: inherit; border-radius: 3px; paddi
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
+
+/* API status + disputes */
+.err-box { padding: 10px 12px; border-radius: 12px; background: var(--bad-soft); color: var(--ink); font-size: 14px; margin: 6px 0 8px; word-break: break-word; }
+.dispute { align-self: center; font-size: 13.5px; padding: 6px 4px 0; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+.dispute:disabled { opacity: .7; text-decoration: none; }

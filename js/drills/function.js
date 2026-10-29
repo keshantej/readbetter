@@ -63,7 +63,7 @@ export function runFunction(ctx) {
       bait ? h('p', {}, 'You took the bait the lead sentence set. Weigh the signal words over the opening.') : null,
       item.explain && h('p.explain', {}, item.explain)));
     const s = scoreFunction(ok, ms, item.level);
-    ctx.done({ skill: 'function', score: s.score, acc: s.acc, ms, units: 1, correct: ok ? 1 : 0, bait });
+    ctx.done({ skill: 'function', score: s.score, acc: s.acc, ms, units: 1, correct: ok ? 1 : 0, bait, responses: [`Chose: ${FUNCTIONS[k].name}`] });
     grid.scrollIntoView({ block: 'nearest' });
   }
 }

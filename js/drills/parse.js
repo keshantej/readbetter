@@ -22,6 +22,7 @@ export function runParse(ctx) {
   body.append(sentenceEl, log);
 
   let idx = 0, correct = 0, answering = false;
+  const responses = [];
 
   function markSpan(span, cls) {
     words.forEach((w, i) => { if (w.s < span[1] && w.e > span[0]) spans[i].classList.add(cls); });
@@ -64,6 +65,7 @@ export function runParse(ctx) {
     const i = +w.dataset.i;
     const span = findSpan(item.sentence, t.answer);
     const ok = words[i].s < span[1] && words[i].e > span[0];
+    responses.push(`Task ${idx + 1}: tapped "${words[i].text}"`);
     markSpan(span, 'ans');
     if (!ok) spans[i].classList.add('wrong');
     finishTask(ok, ok ? null : `Answer: “${t.answer}”`);
@@ -73,6 +75,7 @@ export function runParse(ctx) {
     if (!answering) return;
     const t = item.tasks[idx];
     const ok = i === t.answer;
+    responses.push(`Task ${idx + 1}: chose ${i}. ${t.choices[i]}`);
     foot.querySelectorAll('.choice').forEach((b, j) => {
       b.disabled = true;
       if (j === t.answer) b.classList.add('right');
@@ -91,7 +94,7 @@ export function runParse(ctx) {
     }
     if (item.explain) log.prepend(h('p.reading-note', {}, item.explain));
     clear(foot);
-    ctx.done({ skill: 'parse', score: s.score, acc: s.acc, ms, units: item.tasks.length, correct });
+    ctx.done({ skill: 'parse', score: s.score, acc: s.acc, ms, units: item.tasks.length, correct, responses });
   }
 
   showTask();

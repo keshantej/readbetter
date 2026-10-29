@@ -1,6 +1,6 @@
 // Item bank, adaptive selection, background refill, and result recording.
 
-import { S, bank, setBank, save, addAttempt, today, uid } from './store.js';
+import { S, bank, setBank, save, addAttempt, attempts, today, uid } from './store.js';
 import { update, itemRating, pickLevel, levelFor } from './rating.js';
 import { TAG_KEYS } from './taxonomy.js';
 import { hasKey } from './claude.js';
@@ -171,10 +171,20 @@ export function refill() {
     if (inv.parse < 4) plan.push(['parse']);
     if (S().settings.pacerWarmup && inv.easy < 1) plan.push(['read', { easy: true }]);
     if (benchmarkDue() && inv.benchmark < 1) plan.push(['read', { benchmark: true }]);
-    for (const [type, opts] of plan) {
-      try { await generateOne(type, opts || {}); }
-      catch (e) { console.warn('refill failed', type, e.message); if (e.status === 401 || e.status === 0) break; }
-    }
+    // Two workers in parallel: generation with thinking takes 20–60 s per call.
+    let stop = false;
+    const worker = async () => {
+      while (!stop && plan.length) {
+        const [type, opts] = plan.shift();
+        try { await generateOne(type, opts || {}); }
+        catch (e) {
+          console.warn('refill failed', type, e.message);
+          // Systematic failures (bad key, bad request, billing, offline) won't fix themselves on retry.
+          if ([0, 400, 401, 403, 404].includes(e.status) || e.kind === 'nokey') stop = true;
+        }
+      }
+    };
+    await Promise.all([worker(), worker()]);
     // If a run produced nothing usable, back off instead of burning calls.
     if (plan.length && inventory().total <= before) cooldownUntil = Date.now() + 10 * 60e3;
   })().finally(() => { refilling = null; notify(); });
@@ -187,13 +197,16 @@ export function record(r) {
   const st = S();
   const { item, mode = 'quick' } = r;
   const rated = ['parse', 'function', 'read'].includes(r.skill) && !['pacer', 'rsvp', 'review'].includes(mode);
+  const now = Date.now();
   let delta = 0;
+  let prev = null;
   if (rated) {
     const before = st.ratings[r.skill];
+    prev = { ...before };
     const after = update(before, itemRating(item.level), r.score);
     delta = after.r - before.r;
     st.ratings[r.skill] = after;
-    st.ratingHistory.push({ t: Date.now(), s: r.skill, r: Math.round(after.r), rd: Math.round(after.rd) });
+    st.ratingHistory.push({ t: now, s: r.skill, r: Math.round(after.r), rd: Math.round(after.rd) });
   }
   if (mode !== 'review') for (const tag of item.tags || []) {
     const t = st.tags[tag] || (st.tags[tag] = { n: 0, c: 0 });
@@ -210,16 +223,52 @@ export function record(r) {
   st.missed = st.missed.slice(0, 80);
   if (mode === 'benchmark') st.lastBenchmark = Date.now();
 
+  const attemptId = uid('a');
   addAttempt({
-    id: uid('a'), t: Date.now(), item: item.id, type: item.type, mode, level: item.level,
+    id: attemptId, t: now, item: item.id, type: item.type, mode, level: item.level,
     domain: item.domain, tags: item.tags, score: +r.score.toFixed(3), acc: +r.acc.toFixed(3),
     ms: Math.round(r.ms || 0), wpm: r.wpm ? Math.round(r.wpm) : undefined,
     comp: r.comp != null ? +r.comp.toFixed(3) : undefined, err: r.err ? Math.round(r.err) : undefined,
-    gist: r.gist, units: r.units, rated,
+    gist: r.gist, units: r.units, rated, skill: r.skill, prev, delta: rated ? +delta.toFixed(3) : 0,
+    qkinds: (r.qResults || []).map(q => [q.kind, q.ok ? 1 : 0]),
   });
   prune();
   save('state');
-  return { delta, rating: rated ? st.ratings[r.skill] : null };
+  return { delta, rating: rated ? st.ratings[r.skill] : null, attemptId };
+}
+
+// Undo an attempt whose item was found flawed: restore the rating, back out tag and
+// question-type stats, drop the item, and mark the attempt void so charts skip it.
+export function voidAttempt(attemptId) {
+  const st = S();
+  const a = attempts().find(x => x.id === attemptId);
+  if (!a || a.voided) return null;
+  a.voided = true;
+  let restored = null;
+  if (a.rated && a.prev) {
+    const hist = st.ratingHistory;
+    const idx = hist.findIndex(e => e.t === a.t && e.s === a.skill);
+    const later = attempts().some(x => x.t > a.t && x.rated && !x.voided && x.skill === a.skill);
+    // Nothing rated in this skill since: restore exactly. Otherwise back out just this delta.
+    if (!later) st.ratings[a.skill] = { ...a.prev };
+    else st.ratings[a.skill].r -= a.delta || 0;
+    if (idx >= 0) hist.splice(idx, 1);
+    restored = Math.round(st.ratings[a.skill].r);
+  }
+  if (a.mode !== 'review') for (const tag of a.tags || []) {
+    const t = st.tags[tag];
+    if (t) { t.n = Math.max(0, t.n - 1); t.c = Math.max(0, +(t.c - a.acc).toFixed(6)); }
+  }
+  for (const [kind, ok] of a.qkinds || []) {
+    const t = st.qtypes[kind];
+    if (t) { t.n = Math.max(0, t.n - 1); t.c = Math.max(0, t.c - ok); }
+  }
+  st.missed = st.missed.filter(id => id !== a.item);
+  st.flagged = [...(st.flagged || []), a.item].slice(-200);
+  setBank(bank().filter(i => i.id !== a.item));
+  for (const p of st.packs) p.itemIds = p.itemIds.filter(id => id !== a.item);
+  save('state', 'attempts');
+  return { restored, skill: a.skill };
 }
 
 // Drop served AI items from the bank unless they're worth reviewing or belong to a pack.

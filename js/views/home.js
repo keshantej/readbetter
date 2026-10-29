@@ -2,6 +2,7 @@ import { h, signed } from '../ui.js';
 import { S, today } from '../store.js';
 import { composite, streak, inventory, benchmarkDue, isRefilling, refill, targetLevel } from '../engine.js';
 import { hasKey } from '../claude.js';
+import { apiCallout } from './settings.js';
 import { sessionInProgress, startSession, planSession } from '../session.js';
 import { compositeAt } from './progress.js';
 import { LABELS } from '../runner.js';
@@ -48,6 +49,8 @@ export function home(host, nav) {
     benchmarkDue() && !ss ? h('a.callout', { href: '#/quick/read/benchmark' },
       h('strong', {}, 'Weekly benchmark is due'),
       h('span', {}, 'A fixed-difficulty passage. Your cleanest measure of progress — it’s also folded into today’s session.')) : null,
+
+    hasKey() ? apiCallout() : null,
 
     !hasKey() ? h('a.callout.warn', { href: '#/settings' },
       h('strong', {}, 'Add your Claude API key'),

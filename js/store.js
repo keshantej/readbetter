@@ -50,6 +50,7 @@ export const DEFAULT_SETTINGS = {
   theme: 'auto',
   rsvpWpm: 350,
   profile: '',
+  verifyItems: true,
 };
 
 export function defaultState() {
@@ -74,6 +75,8 @@ export function defaultState() {
     lastBenchmark: 0,
     usage: {},         // 'YYYY-MM' -> {in, out, cost, calls}
     coach: null,       // {t, text}
+    apiStatus: null,   // {ok, t, msg, job, lastError}
+    quality: { checked: 0, dropped: 0, disputes: 0, upheld: 0 },
   };
 }
 

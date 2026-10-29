@@ -28,6 +28,7 @@ export const clear = el => { while (el.firstChild) el.firstChild.remove(); retur
 export const $ = (sel, root = document) => root.querySelector(sel);
 
 export function toast(msg, kind = '') {
+  document.querySelectorAll('.toast').forEach(t => t.remove());
   const t = h('div.toast' + (kind ? '.' + kind : ''), { role: 'status' }, msg);
   document.body.append(t);
   requestAnimationFrame(() => t.classList.add('show'));
@@ -65,16 +66,24 @@ export const pct = x => `${Math.round(x * 100)}%`;
 export const signed = x => (x > 0 ? '+' : x < 0 ? '−' : '±') + Math.abs(Math.round(x));
 
 // Stopwatch that can pause (explanations and feedback don't count against you).
+// It also pauses while the app is in the background, so a phone call mid-read
+// doesn't wreck your words-per-minute.
 export function stopwatch(onTick) {
-  let acc = 0, start = null, raf = null;
+  let acc = 0, start = null, raf = null, hiddenPaused = false;
   const tick = () => { onTick?.(elapsed()); raf = requestAnimationFrame(tick); };
   const elapsed = () => acc + (start != null ? performance.now() - start : 0);
+  const pause = () => { if (start != null) { acc += performance.now() - start; start = null; } cancelAnimationFrame(raf); };
+  const onVis = () => {
+    if (document.hidden && start != null) { pause(); hiddenPaused = true; }
+    else if (!document.hidden && hiddenPaused) { hiddenPaused = false; start = performance.now(); if (onTick) tick(); }
+  };
+  document.addEventListener('visibilitychange', onVis);
   return {
-    start() { if (start == null) { start = performance.now(); if (onTick) tick(); } },
-    stop() { if (start != null) { acc += performance.now() - start; start = null; } cancelAnimationFrame(raf); onTick?.(acc); return acc; },
+    start() { hiddenPaused = false; if (start == null) { start = performance.now(); if (onTick) tick(); } },
+    stop() { hiddenPaused = false; pause(); onTick?.(acc); return acc; },
     elapsed,
     running: () => start != null,
-    dispose() { cancelAnimationFrame(raf); },
+    dispose() { cancelAnimationFrame(raf); document.removeEventListener('visibilitychange', onVis); },
   };
 }
 

@@ -1,6 +1,6 @@
 import { h, seg, toggle, toast, confirmSheet } from '../ui.js';
 import { S, save, exportAll, importAll, resetAll, flush } from '../store.js';
-import { MODELS, testKey, monthSpend } from '../claude.js';
+import { MODELS, testKey, monthSpend, apiStatus, hasKey } from '../claude.js';
 import { DOMAINS } from '../taxonomy.js';
 import { refill } from '../engine.js';
 import { applyTheme } from '../app.js';
@@ -20,6 +20,7 @@ export function settings(host, nav) {
       Object.entries(MODELS).map(([id, m]) => h('option', { value: id, selected: set[field] === id }, `${m.name} — $${m.in}/$${m.out} per MTok`))),
     h('small.muted', {}, help));
 
+  let statusEl = statusRow();
   const spend = monthSpend();
   const allTime = Object.values(st.usage).reduce((a, u) => a + u.cost, 0);
 
@@ -35,8 +36,9 @@ export function settings(host, nav) {
         h('button.btn', { onclick: async e => {
           set.apiKey = key.value.trim(); commit();
           const b = e.currentTarget; b.disabled = true; b.textContent = 'Testing…';
-          try { await testKey(); keyStatus.textContent = 'Key works.'; toast('Key works — generating your first items'); refill(); }
+          try { const ok = await testKey(); keyStatus.textContent = `Key works with ${ok.join(', ')}.`; toast('Key works — generating fresh items'); refill(); }
           catch (err) { keyStatus.textContent = err.message; toast(err.message, 'error'); }
+          const fresh = statusRow(); statusEl.replaceWith(fresh); statusEl = fresh;
           b.disabled = false; b.textContent = 'Test key';
         } }, 'Test key'),
         h('a.btn.ghost', { href: 'https://console.anthropic.com/settings/keys', target: '_blank', rel: 'noopener' }, 'Get a key')),
@@ -44,6 +46,9 @@ export function settings(host, nav) {
       modelSelect('genModel', 'Item writer', 'Writes your sentences, paragraphs, and passages. Sonnet is the sweet spot; Haiku items are noticeably easier to see through.'),
       modelSelect('gradeModel', 'Grader & coach', 'Grades your gists and writes coaching. Haiku is fine here if you want to cut cost.'),
       modelSelect('packModel', 'Your-reading packs', 'Builds drills from text you paste. Opus picks the genuinely hard sentences best.'),
+      statusEl,
+      toggle(set.verifyItems, v => { set.verifyItems = v; commit(); }, 'Double-check answer keys'),
+      h('p.hint', {}, `A second pass answers every new question blind and drops any it disagrees with. Adds roughly a third to generation cost.${st.quality?.checked ? ` So far: ${st.quality.checked} items checked, ${st.quality.dropped} dropped; ${st.quality.disputes || 0} disputes, ${st.quality.upheld || 0} upheld.` : ''}`),
       h('div.kv', {}, h('span', {}, 'Spend this month'), h('b', {}, `$${spend.cost.toFixed(2)}`)),
       h('div.kv', {}, h('span', {}, 'All time'), h('b', {}, `$${allTime.toFixed(2)}`)),
       h('p.hint', {}, 'Estimated from token usage; the Console bill is authoritative.')),
@@ -104,4 +109,27 @@ async function exportData() {
   }
   const a = h('a', { href: URL.createObjectURL(blob), download: name });
   document.body.append(a); a.click(); a.remove();
+}
+
+const ago = t => {
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+};
+
+function statusRow() {
+  const s = apiStatus();
+  if (!s) return h('div.kv', {}, h('span', {}, 'Last API call'), h('b.muted', {}, 'none yet'));
+  return h('div', {},
+    h('div.kv', {}, h('span', {}, 'Last API call'), h('b.' + (s.ok ? 'up' : 'down'), {}, s.ok ? `OK · ${ago(s.t)}` : `Failed · ${ago(s.t)}`)),
+    !s.ok ? h('p.err-box', {}, s.job ? `While ${s.job}: ` : '', s.msg) : null,
+    s.ok && s.lastError && Date.now() - s.lastError.t < 864e5 ? h('p.hint', {}, `Earlier error (${ago(s.lastError.t)}): ${s.lastError.msg}`) : null);
+}
+
+// Shown on Home when the most recent API call failed, so background failures aren't silent.
+export function apiCallout() {
+  const s = apiStatus();
+  if (!s || s.ok || Date.now() - s.t > 6 * 3600e3) return null;
+  return h('a.callout.warn', { href: '#/settings' },
+    h('strong', {}, 'Claude API problem'),
+    h('span', {}, `${s.job ? `While ${s.job}: ` : ''}${s.msg} You're drilling on stored items until this is fixed.`));
 }

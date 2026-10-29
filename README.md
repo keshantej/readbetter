@@ -51,6 +51,19 @@ Then on GitHub: **Settings → Pages → Build and deployment → Deploy from a 
 
 The key is stored only in the app's IndexedDB on your device. It's sent only to `api.anthropic.com` (calls go directly from the browser using Anthropic's `anthropic-dangerous-direct-browser-access` header), and it's never included in backups. The page loads no third-party scripts, and its Content-Security-Policy restricts network calls to the Anthropic API.
 
+### API notes (Claude 5.5 models)
+
+All calls use **structured outputs** (`output_config.format` with a strict JSON schema). The 5.5 models reject several older request settings with a 400 error, so Dense never sends them:
+
+- Forced `tool_choice` (`"tool"` or `"any"`) is rejected on Sonnet 5.5 and Opus 5.5.
+- `temperature`, `top_p`, and `top_k` are rejected on all three.
+
+Adaptive thinking is on by default, and thinking tokens count toward `max_tokens` and are billed as output. So every job sets `output_config.effort`: `low` for grading, `medium` for writing items. Token budgets leave room for thinking, and a call that hits the limit is retried once with double the budget. API failures are never silent. The last error shows on Home and in Settings, and **Test key** runs the exact request shape on every model you've selected.
+
+### Disputes
+
+If you think an answer key is wrong, tap **I think the answer key is wrong** under the result and give your reading. Claude decides the dispute from the text alone. If the key is wrong, or if your answer is equally defensible, the item is deleted, the attempt is voided, and your rating and per-structure stats are restored. Settings shows how many items were dropped and how many disputes were upheld.
+
 ### Models and cost
 
 You can pick a model separately for three jobs in Settings:
@@ -61,7 +74,7 @@ You can pick a model separately for three jobs in Settings:
 | Grader & coach | Sonnet 5.5 | Haiku 5.5 is fine here and much cheaper. |
 | Your-reading packs | Sonnet 5.5 | Switch to Opus 5.5 if you want the hardest sentences picked most reliably. |
 
-Items are generated in batches and stocked in the background, so sessions start instantly and you don't pay per tap. The system prompt is cached across calls. A rough estimate on Sonnet is a few cents per 8-minute session, which comes to low single-digit dollars a month at daily use. Settings shows a running spend estimate, but the Console bill is authoritative.
+Items are generated in batches and stocked in the background, so sessions start instantly and you don't pay per tap. The system prompt is cached across calls. Thinking makes each generated batch cost more output tokens, and answer-key checking adds roughly a third on top. A rough estimate on Sonnet is 5–15¢ per day of training. Grading on Haiku cuts that noticeably. Settings shows a running spend estimate, but the Console bill is authoritative.
 
 **No key?** The app ships with 30 hand-written items (14 parse, 10 function, 6 reads including a benchmark), so it works fully offline. Gist grading falls back to self-grading against a reference.
 
@@ -96,7 +109,7 @@ js/views/         home, progress, library, settings
 js/seed.js        built-in starter items
 ```
 
-Every AI-generated item is checked mechanically before it reaches the bank. Tap answers must be exact substrings of the sentence, structural segments must reproduce the sentence exactly, multiple-choice answers must be valid indexes, and pack excerpts must appear verbatim in your pasted text. Anything that fails is dropped. Answer choices are shuffled to cancel the model's position bias.
+Every AI-generated item is checked twice before it reaches the bank. First, a second model pass answers each multiple-choice question blind and drops any question where it disagrees with the key (toggle: **Settings → Double-check answer keys**). Second, the item is checked mechanically. Tap answers must be exact substrings of the sentence, structural segments must reproduce the sentence exactly, multiple-choice answers must be valid indexes, and pack excerpts must appear verbatim in your pasted text. Anything that fails is dropped. Answer choices are shuffled to cancel the model's position bias.
 
 ## License
 

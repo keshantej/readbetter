@@ -1,8 +1,10 @@
 // Runs one drill item inside a standard frame: header, timer, body, footer, result.
 
-import { h, clear, spinner, stopwatch, fmtTime, signed } from './ui.js';
+import { h, clear, spinner, stopwatch, fmtTime, signed, sheet, toast } from './ui.js';
 import { S, save } from './store.js';
-import { obtain, record } from './engine.js';
+import { obtain, record, voidAttempt } from './engine.js';
+import { hasKey } from './claude.js';
+import { adjudicate } from './gen.js';
 import { TAGS } from './taxonomy.js';
 import { runParse } from './drills/parse.js';
 import { runFunction } from './drills/function.js';
@@ -71,7 +73,7 @@ export async function runStep(host, { type, mode = 'quick', opts = {}, item = nu
       result.item = item;
       result.mode = mode;
       beforeRecord?.(result);
-      const { delta, rating } = record(result);
+      const { delta, rating, attemptId } = record(result);
       if (mode === 'review' && result.acc >= 0.67) {
         S().missed = S().missed.filter(id => id !== item.id);
         save('state');
@@ -81,6 +83,9 @@ export async function runStep(host, { type, mode = 'quick', opts = {}, item = nu
           h('span', {}, SKILL_NAMES[result.skill]), h('b', {}, Math.round(rating.r)), h('small', {}, signed(delta)))
           : h('div.delta', {}, h('span', {}, mode === 'review' ? 'Review' : 'Unrated'), h('b', {}, `${Math.round(result.acc * 100)}%`)),
         h('button.btn.primary', { onclick: () => { cleanup(); onNext(result); } }, nextLabel)));
+      if (result.acc < 1 && result.responses?.length && hasKey()) {
+        f.foot.append(h('button.link.dispute', { onclick: e => dispute(item, result, attemptId, e.currentTarget) }, 'I think the answer key is wrong'));
+      }
       f.foot.querySelector('.result-bar button')?.focus({ preventScroll: true });
     },
   };
@@ -88,4 +93,39 @@ export async function runStep(host, { type, mode = 'quick', opts = {}, item = nu
   if (type === 'parse') runParse(ctx);
   else if (type === 'function') runFunction(ctx);
   else runRead(ctx);
+}
+
+// Contest an answer key. Claude adjudicates on the text; a flawed item is removed
+// and the attempt is voided (rating and stats restored).
+async function dispute(item, result, attemptId, btn) {
+  const note = h('textarea.input', { rows: 4, placeholder: 'Optional: your reading, e.g. "‘unless’ scopes over both (a) and (b) because…"' });
+  const go = await sheet('Dispute this item', h('div', {}, h('p.muted', {}, 'Claude re-reads the item and your answers. If the key is wrong or your answer is equally defensible, the item is removed and this attempt no longer counts.'), note), {
+    actions: [{ label: 'Cancel', value: false, kind: 'ghost' }, { label: 'Submit', value: true, kind: 'primary' }],
+  });
+  if (!go) return;
+  btn.disabled = true;
+  btn.textContent = 'Reviewing…';
+  const st = S();
+  st.quality = st.quality || { checked: 0, dropped: 0, disputes: 0, upheld: 0 };
+  try {
+    const v = await adjudicate(item, result.responses, note.value.trim());
+    st.quality.disputes++;
+    let body;
+    if (v.verdict === 'item_flawed') {
+      st.quality.upheld++;
+      const undo = voidAttempt(attemptId);
+      body = h('div', {}, h('p', {}, h('strong', {}, 'You’re right. '), v.explanation),
+        h('p.muted', {}, undo?.restored != null ? `Item removed. Your rating is back to ${undo.restored}.` : 'Item removed; this attempt no longer counts.'));
+      btn.textContent = 'Item removed';
+    } else {
+      body = h('div', {}, h('p', {}, h('strong', {}, 'The key stands. '), v.explanation));
+      btn.textContent = 'Key upheld';
+    }
+    save('state');
+    sheet(null, body, { actions: [{ label: 'OK', value: true, kind: 'primary' }] });
+  } catch (e) {
+    toast(e.message, 'error');
+    btn.disabled = false;
+    btn.textContent = 'I think the answer key is wrong';
+  }
 }

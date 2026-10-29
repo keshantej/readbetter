@@ -18,9 +18,9 @@ threading.Thread(target=srv.serve_forever, daemon=True).start()
 S1 = 'Unless the commission finds that the applicant has not complied with section 9, a permit issued under this chapter shall remain valid for three years, provided that the holder files an annual report.'
 PARSE = {"items": [{"level": 3, "tags": ["double-negation", "proviso"], "sentence": S1 if i == 0 else S1.replace('three', ['four', 'five', 'six'][i - 1]),
     "tasks": [
-        {"kind": "tap", "prompt": "Tap the main verb.", "answer": "shall remain valid", "explain": "Main clause verb."},
-        {"kind": "mc", "prompt": "What keeps the permit valid?", "choices": ["Filing an annual report", "A commission finding", "Section 9", "Nothing"], "answer": 0, "explain": "The proviso."},
-        {"kind": "tap", "prompt": "Tap who makes the finding.", "answer": "the commission", "explain": "Agent of the finding."}],
+        {"kind": "tap", "prompt": "Tap the main verb.", "answer_text": "shall remain valid", "choices": [], "answer_index": -1, "explain": "Main clause verb."},
+        {"kind": "mc", "prompt": "What keeps the permit valid?", "answer_text": "", "choices": ["Filing an annual report", "A commission finding", "Section 9", "Nothing"], "answer_index": 0, "explain": "The proviso."},
+        {"kind": "tap", "prompt": "Tap who makes the finding.", "answer_text": "the commission", "choices": [], "answer_index": -1, "explain": "Agent of the finding."}],
     "segments": [{"text": "Unless the commission finds that the applicant has not complied with section 9,", "role": "exception"},
                  {"text": "a permit issued under this chapter shall remain valid for " + ['three', 'four', 'five', 'six'][i] + " years,", "role": "core"},
                  {"text": "provided that the holder files an annual report.", "role": "condition"}],
@@ -43,14 +43,90 @@ GIST = {"score": 2, "feedback": "You captured the main point but dropped the pri
 PACK = {"title": "Test reading", "level": 4, "parse": [{**PARSE["items"][0]}], "functions": [], "read": {**READ}}
 
 calls = []
+contract_violations = []
+mode = {'verify_disagree': False, 'dispute': 'item_flawed', 'fail_next': 0}
+
+UNSUPPORTED = {'minimum', 'maximum', 'multipleOf', 'minLength', 'maxLength', 'maxItems', 'oneOf', 'pattern'}
+def check_schema(sch, path='$'):
+    """Enforce the structured-outputs JSON Schema subset."""
+    if not isinstance(sch, dict): return
+    for k in sch:
+        if k in UNSUPPORTED: contract_violations.append(f'{path}: unsupported keyword {k}')
+    if sch.get('minItems', 0) not in (0, 1): contract_violations.append(f'{path}: minItems > 1')
+    t = sch.get('type')
+    if t == 'object':
+        if sch.get('additionalProperties') is not False: contract_violations.append(f'{path}: additionalProperties must be false')
+        props = sch.get('properties', {})
+        if set(sch.get('required', [])) != set(props): contract_violations.append(f'{path}: not all properties required')
+        for k, v in props.items(): check_schema(v, f'{path}.{k}')
+    if t == 'array': check_schema(sch.get('items'), f'{path}[]')
+    if t is None and 'anyOf' not in sch and 'enum' not in sch and 'const' not in sch:
+        contract_violations.append(f'{path}: missing type')
+
+def conforms(val, sch, path='$'):
+    """Validate a fixture against the schema the app sent (so mocks can't drift from reality)."""
+    t = sch.get('type')
+    ok = {'object': dict, 'array': list, 'string': str, 'boolean': bool}.get(t)
+    if t == 'integer' and not (isinstance(val, int) and not isinstance(val, bool)): return [f'{path}: want integer']
+    if ok and not isinstance(val, ok): return [f'{path}: want {t}, got {type(val).__name__}']
+    if 'enum' in sch and val not in sch['enum']: return [f'{path}: {val!r} not in enum']
+    errs = []
+    if t == 'object':
+        for k in sch['properties']:
+            if k not in val: errs.append(f'{path}: missing {k}')
+            else: errs += conforms(val[k], sch['properties'][k], f'{path}.{k}')
+        for k in val:
+            if k not in sch['properties']: errs.append(f'{path}: extra {k}')
+    if t == 'array':
+        for i, v in enumerate(val): errs += conforms(v, sch['items'], f'{path}[{i}]')
+    return errs
+
+def kind_of(schema):
+    pr = schema.get('properties', {})
+    if 'items' in pr:
+        inner = pr['items']['items']['properties']
+        return 'parse' if 'sentence' in inner else 'function'
+    for k, name in [('passage', 'read'), ('answers', 'verify'), ('score', 'gist'), ('verdict', 'dispute'), ('parse', 'pack'), ('ok', 'test')]:
+        if k in pr: return name
+    return 'unknown'
+
+def bad(route, msg):
+    route.fulfill(status=400, content_type='application/json', headers={'access-control-allow-origin': '*'},
+                  body=json.dumps({"type": "error", "error": {"type": "invalid_request_error", "message": msg}}))
+
 def handle(route):
     body = json.loads(route.request.post_data or '{}')
-    tool = (body.get('tool_choice') or {}).get('name')
-    calls.append(tool or 'text')
-    out = {'emit_parse_items': PARSE, 'emit_function_items': FUNC, 'emit_read_item': READ, 'grade_gist': GIST, 'emit_pack': PACK}.get(tool)
-    content = [{"type": "tool_use", "id": "t1", "name": tool, "input": out}] if tool else [{"type": "text", "text": "1. Bottleneck: parse speed.\n2. Do more parse sprints."}]
+    # --- the real Claude 5.5 contract ---
+    tc = (body.get('tool_choice') or {}).get('type')
+    if tc in ('tool', 'any'):
+        calls.append('REJECTED:tool_choice'); return bad(route, 'tool_choice: type "tool" and "any" are not supported for this model.')
+    for k in ('temperature', 'top_p', 'top_k'):
+        if k in body: calls.append(f'REJECTED:{k}'); return bad(route, f'`{k}` is not supported for this model.')
+    if (body.get('thinking') or {}).get('type') in ('disabled', 'enabled'):
+        calls.append('REJECTED:thinking'); return bad(route, 'thinking type not supported')
+    if body['messages'][-1]['role'] != 'user': return bad(route, 'This model does not support assistant message prefill.')
+    if mode['fail_next'] > 0:
+        mode['fail_next'] -= 1; calls.append('FORCED_FAIL')
+        return bad(route, 'Your credit balance is too low to access the Claude API.')
+    fmt = (body.get('output_config') or {}).get('format')
+    if fmt:
+        if fmt.get('type') != 'json_schema': return bad(route, 'bad format type')
+        check_schema(fmt['schema'])
+        k = kind_of(fmt['schema'])
+        out = {
+            'parse': PARSE, 'function': FUNC, 'read': READ, 'gist': GIST, 'pack': PACK, 'test': {"ok": True},
+            'verify': {"answers": [{"id": "0.1", "choice": 3}] if mode['verify_disagree'] else []},
+            'dispute': {"verdict": mode['dispute'], "explanation": "The keyed answer ignores that the proviso governs both clauses."},
+        }.get(k)
+        calls.append(k)
+        errs = conforms(out, fmt['schema'])
+        if errs: contract_violations.append(f'{k} fixture: {errs[:3]}')
+        text = json.dumps(out)
+    else:
+        calls.append('text'); text = "1. Bottleneck: parse speed.\n2. Do more parse sprints."
+    content = [{"type": "thinking", "thinking": "", "signature": "sig"}, {"type": "text", "text": text}]
     route.fulfill(status=200, content_type='application/json', headers={'access-control-allow-origin': '*'},
-                  body=json.dumps({"id": "m", "type": "message", "role": "assistant", "content": content, "stop_reason": "tool_use",
+                  body=json.dumps({"id": "m", "type": "message", "role": "assistant", "content": content, "stop_reason": "end_turn",
                                    "usage": {"input_tokens": 1500, "output_tokens": 2000}}))
 
 errors = []
@@ -60,7 +136,7 @@ with sync_playwright() as p:
                         user_agent='Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1')
     page = ctx.new_page()
     page.on('pageerror', lambda e: errors.append(f'pageerror: {e}'))
-    page.on('console', lambda m: errors.append(f'console.{m.type}: {m.text}') if m.type in ('error',) else None)
+    page.on('console', lambda m: errors.append(f'console.{m.type}: {m.text}') if m.type == 'error' and '400' not in m.text else None)
     page.route('https://api.anthropic.com/**', handle)
     base = f'http://127.0.0.1:{port}/'
     shot = lambda n: page.screenshot(path=f'{OUT}/{n}.png', full_page=False)
@@ -137,6 +213,30 @@ with sync_playwright() as p:
     page.goto(base + '#/progress'); page.wait_for_selector('.page-title'); shot('19-progress')
     page.click('text=Get coaching from my data'); page.wait_for_selector('.coach-text');
     page.evaluate('window.scrollTo(0, document.body.scrollHeight)'); shot('20-progress-bottom')
+    # API failure is surfaced, not silent
+    mode['fail_next'] = 3
+    page.goto(base + '#/settings'); page.wait_for_selector('.settings'); page.click('text=Test key'); page.wait_for_selector('.err-box'); shot('23-settings-error')
+    page.goto(base + '#/'); page.wait_for_selector('text=Claude API problem'); shot('24-home-api-error')
+    mode['fail_next'] = 0
+    page.goto(base + '#/settings'); page.click('text=Test key'); page.wait_for_selector('text=Key works with')
+    page.goto(base + '#/'); page.wait_for_selector('.wordmark')
+    assert not page.query_selector('text=Claude API problem'), 'error callout should clear after a good call'
+    # dispute a parse item: answer every task wrong, dispute, item_flawed -> rating restored
+    page.goto(base + '#/quick/parse'); page.wait_for_selector('.sentence')
+    before = page.evaluate("1")
+    for t in range(4):
+        if page.query_selector('.result-bar'): break
+        if page.query_selector('.task .choice:not([disabled])'): page.click('.task .choice >> nth=3')
+        elif page.query_selector('.tappable'): page.click('.sentence .w >> nth=-1')
+        page.wait_for_selector('.task .btn.primary'); page.click('.task .btn.primary')
+    page.wait_for_selector('.result-bar')
+    r_after = page.inner_text('.delta b')
+    page.click('text=I think the answer key is wrong'); page.fill('.sheet textarea', 'The proviso governs both clauses.')
+    page.click('.sheet >> text=Submit'); page.wait_for_selector("text=You’re right"); shot('25-dispute-upheld')
+    restored_msg = page.locator('.sheet', has_text='You’re right').inner_text()
+    page.locator('.sheet', has_text='You’re right').locator('text=OK').click()
+    r_restored = page.evaluate("(async () => { const m = await import('./js/store.js'); return Math.round(m.S().ratings.parse.r); })()")
+    page.click('#view .icon-btn')
     # dark mode
     page.emulate_media(color_scheme='dark'); page.goto(base + '#/'); page.wait_for_selector('.wordmark'); shot('21-home-dark')
     page.goto(base + '#/quick/parse'); page.wait_for_selector('.sentence'); shot('22-parse-dark')
@@ -147,5 +247,8 @@ with sync_playwright() as p:
 
 srv.shutdown()
 print('API calls:', calls)
+print('rating shown after wrong answers:', r_after, '| restored to:', r_restored, '| dispute:', restored_msg.replace('\n', ' ')[:160])
+print('CONTRACT VIOLATIONS:' if contract_violations else 'no contract violations', *contract_violations, sep='\n  ')
+assert not contract_violations and not any(c.startswith('REJECTED') for c in calls)
 print('rating text after reload:', persisted)
 print('ERRORS:' if errors else 'no page errors', *errors, sep='\n  ')

@@ -41,7 +41,7 @@ function dailyMedian(list, f) {
 }
 
 export function insights() {
-  const A = attempts();
+  const A = attempts().filter(a => !a.voided);
   const now = Date.now();
   const out = [];
   const cmp = (label, list, f, better, unit, fmt = v => Math.round(v)) => {
@@ -71,7 +71,7 @@ export function insights() {
 
 export function summaryForCoach() {
   const st = S();
-  const A = attempts().filter(a => a.t > Date.now() - 30 * DAY);
+  const A = attempts().filter(a => !a.voided && a.t > Date.now() - 30 * DAY);
   const by = type => A.filter(a => a.type === type && !['pacer', 'rsvp', 'review'].includes(a.mode));
   const avg = (l, f) => l.length ? +(l.reduce((x, a) => x + f(a), 0) / l.length).toFixed(3) : null;
   const parse = by('parse'), fn = by('function'), reads = by('read');
@@ -91,7 +91,7 @@ export function summaryForCoach() {
 
 export function progress(host) {
   const st = S();
-  const A = attempts();
+  const A = attempts().filter(a => !a.voided);
   let skill = 'read';
 
   const hist = st.ratingHistory;

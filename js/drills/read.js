@@ -1,7 +1,7 @@
 // Dense read (self-paced), paced read, RSVP, and the weekly benchmark.
 // All share the same flow: read → closed-book questions → one-line gist → score.
 
-import { h, clear, spinner, fmtTime, toast } from '../ui.js';
+import { h, clear, spinner, fmtTime, toast, stopwatch } from '../ui.js';
 import { S, save } from '../store.js';
 import { comprehension, scoreRead, readTargetWpm } from '../rating.js';
 import { QKINDS } from '../taxonomy.js';
@@ -17,6 +17,7 @@ export function runRead(ctx) {
   const useGist = !paced && !rsvp;
   let readMs = 0, wpm = 0, lookbacks = 0;
   const qResults = [];
+  const responses = [];
 
   // ---- intro ----
   const estMin = item.words / (paced ? st.pacer.wpm : rsvp ? st.settings.rsvpWpm : readTargetWpm(item.level));
@@ -36,9 +37,11 @@ export function runRead(ctx) {
     if (rsvp) return rsvpView();
     const text = h('div.reading.passage', {}, paragraphs(item.passage).map(p => h('p', {}, p)));
     body.append(text);
-    const t0 = performance.now();
+    const sw = stopwatch();
+    ctx.onCleanup(() => sw.dispose());
+    sw.start();
     foot.append(h('button.btn.primary.wide', { onclick: () => {
-      readMs = performance.now() - t0;
+      readMs = sw.stop(); sw.dispose();
       wpm = item.words / (readMs / 60000);
       questions();
     } }, 'Done reading'));
@@ -98,11 +101,18 @@ export function runRead(ctx) {
       h('button.btn.ghost', { onclick: () => adj(10), 'aria-label': 'Faster' }, '+'),
       pauseBtn));
     const onResize = () => { layout(); paint(); };
+    let hiddenAt = 0;
+    const onVis = () => {
+      if (document.hidden && !paused) { hiddenAt = performance.now(); pauseBtn.click(); }
+      else if (!document.hidden && hiddenAt) { startT += performance.now() - hiddenAt; hiddenAt = 0; }
+    };
     addEventListener('resize', onResize);
-    ctx.onCleanup(() => { clearTimeout(timer); removeEventListener('resize', onResize); });
+    document.addEventListener('visibilitychange', onVis);
+    ctx.onCleanup(() => { clearTimeout(timer); removeEventListener('resize', onResize); document.removeEventListener('visibilitychange', onVis); });
     requestAnimationFrame(() => { layout(); step(); });
     function end() {
       removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onVis);
       readMs = performance.now() - startT;
       wpm = speed;
       questions();
@@ -144,7 +154,9 @@ export function runRead(ctx) {
     foot.append(h('div.row.controls', {},
       h('button.btn.ghost', { onclick: () => adj(-25) }, '−'), speedLabel, h('button.btn.ghost', { onclick: () => adj(25) }, '+'),
       h('button.btn', { onclick: () => { clearTimeout(timer); end(); } }, 'Stop')));
-    ctx.onCleanup(() => clearTimeout(timer));
+    const onVis = () => { if (document.hidden && !paused && t0) toggle(); };
+    document.addEventListener('visibilitychange', onVis);
+    ctx.onCleanup(() => { clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); });
     show({ w: 'Ready' });
     setTimeout(() => { t0 = performance.now(); tick(); }, 700);
     function end() {
@@ -176,6 +188,7 @@ export function runRead(ctx) {
       function answer(j, btn) {
         const ok = j === q.answer;
         qResults.push({ kind: q.kind, ok });
+        responses.push(`Q${qi + 1}: chose ${j}. ${q.choices[j]}`);
         choices.querySelectorAll('.choice').forEach((b, k) => { b.disabled = true; if (k === q.answer) b.classList.add('right'); });
         if (!ok) btn.classList.add('wrong');
         if (q.explain) body.append(h('p.explain.boxed', {}, q.explain));
@@ -265,7 +278,7 @@ export function runRead(ctx) {
       stat('Effective rate', `${Math.round(err)}`, 'wpm'),
       stat('Time', fmtTime(readMs), '')),
       note && h('p.note-box', {}, note));
-    ctx.done({ skill: 'read', score: s.score, acc: comp, comp, wpm, err, ms: readMs, qResults, gist: gistScore, lookbacks, units: qResults.length });
+    ctx.done({ skill: 'read', score: s.score, acc: comp, comp, wpm, err, ms: readMs, qResults, gist: gistScore, lookbacks, units: qResults.length, responses });
   }
 }
 
