@@ -139,7 +139,11 @@ with sync_playwright() as p:
     page.on('console', lambda m: errors.append(f'console.{m.type}: {m.text}') if m.type == 'error' and '400' not in m.text else None)
     page.route('https://api.anthropic.com/**', handle)
     base = f'http://127.0.0.1:{port}/'
-    shot = lambda n: page.screenshot(path=f'{OUT}/{n}.png', full_page=False)
+    stray = []
+    def shot(n):
+        txt = page.evaluate("document.body.innerText")
+        for bad in re.findall(r'\b(null|undefined|NaN)\b', txt): stray.append(f'{n}: {bad}')
+        page.screenshot(path=f'{OUT}/{n}.png', full_page=False)
 
     # 1. first launch, no key — seed items
     page.goto(base); page.wait_for_selector('.wordmark'); shot('01-home-nokey')
@@ -246,9 +250,10 @@ with sync_playwright() as p:
     b.close()
 
 srv.shutdown()
+print('STRAY TEXT:' if stray else 'no stray null/undefined/NaN on any screen', *stray, sep='\n  ')
 print('API calls:', calls)
 print('rating shown after wrong answers:', r_after, '| restored to:', r_restored, '| dispute:', restored_msg.replace('\n', ' ')[:160])
 print('CONTRACT VIOLATIONS:' if contract_violations else 'no contract violations', *contract_violations, sep='\n  ')
-assert not contract_violations and not any(c.startswith('REJECTED') for c in calls)
+assert not stray and not contract_violations and not any(c.startswith('REJECTED') for c in calls)
 print('rating text after reload:', persisted)
 print('ERRORS:' if errors else 'no page errors', *errors, sep='\n  ')

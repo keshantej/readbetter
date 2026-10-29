@@ -1,7 +1,7 @@
 // Dense read (self-paced), paced read, RSVP, and the weekly benchmark.
 // All share the same flow: read → closed-book questions → one-line gist → score.
 
-import { h, clear, spinner, fmtTime, toast, stopwatch } from '../ui.js';
+import { h, clear, put, spinner, fmtTime, toast, stopwatch } from '../ui.js';
 import { S, save } from '../store.js';
 import { comprehension, scoreRead, readTargetWpm } from '../rating.js';
 import { QKINDS } from '../taxonomy.js';
@@ -272,7 +272,7 @@ export function runRead(ctx) {
     } else if (!rsvp && wpm > 1.6 * readTargetWpm(item.level) && comp < 0.6) {
       note = 'You were skimming, not reading. Slow down until comprehension holds.';
     }
-    body.append(h('div.stats-row', {},
+    put(body, h('div.stats-row', {},
       stat('Speed', `${Math.round(wpm)}`, 'wpm'),
       stat('Comprehension', `${Math.round(comp * 100)}`, '%'),
       stat('Effective rate', `${Math.round(err)}`, 'wpm'),

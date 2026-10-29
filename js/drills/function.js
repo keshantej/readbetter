@@ -1,6 +1,6 @@
 // Function call: predict what a paragraph is doing from its lead and signal words.
 
-import { h, clear } from '../ui.js';
+import { h, clear, put } from '../ui.js';
 import { scoreFunction } from '../rating.js';
 import { FUNCTIONS, FUNCTION_KEYS } from '../taxonomy.js';
 
@@ -32,7 +32,7 @@ export function runFunction(ctx) {
     Array.from({ length: Math.max(2, Math.min(7, Math.round(restWords / 14))) }, (_, i) =>
       h('i', { style: { width: `${70 + ((i * 37) % 30)}%` } })));
   const para = h('p.reading', {}, item.lead);
-  body.append(
+  put(body,
     para,
     item.signals.length ? h('div.signals', {}, h('span.cap', {}, 'Ahead'), item.signals.map(s => h('span.chip', {}, s))) : null,
     ghost);

@@ -24,6 +24,9 @@ function append(el, kids) {
   }
 }
 
+// Null-safe append for existing elements (native append prints null as "null").
+export const put = (el, ...kids) => { append(el, kids); return el; };
+
 export const clear = el => { while (el.firstChild) el.firstChild.remove(); return el; };
 export const $ = (sel, root = document) => root.querySelector(sel);
 

@@ -1,5 +1,5 @@
 // Offline shell. Bump VERSION whenever you change app files so phones pick up the update.
-const VERSION = 'dense-v2';
+const VERSION = 'dense-v3';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/store.js', './js/ui.js', './js/claude.js', './js/gen.js', './js/engine.js',
